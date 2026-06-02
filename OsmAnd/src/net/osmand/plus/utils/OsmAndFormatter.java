@@ -79,8 +79,6 @@ public class OsmAndFormatter {
 	public static final float POUNDS_IN_ONE_TON = POUNDS_IN_ONE_KILOGRAM * KILOGRAMS_IN_ONE_TON;
 
 	private static final int SECONDS_IN_HOUR = 3600;
-	private static final DecimalFormat fixed2 = new DecimalFormat("0.00");
-	private static final DecimalFormat fixed1 = new DecimalFormat("0.0");
 
 	private static final int[] ROUNDING_DISTANCE_BOUNDS = Algorithms.generate10BaseRoundingBounds(100, 5);
 
@@ -112,10 +110,23 @@ public class OsmAndFormatter {
 
 	static {
 		setTwelveHoursFormatting(false, Locale.getDefault());
-		fixed2.setMinimumFractionDigits(2);
-		fixed1.setMinimumFractionDigits(1);
-		fixed1.setMinimumIntegerDigits(1);
-		fixed2.setMinimumIntegerDigits(1);
+	}
+
+	@NonNull
+	private static Locale getFormatterLocale(@NonNull OsmandApplication app) {
+		LocaleHelper localeHelper = app.getLocaleHelper();
+		Locale preferredLocale = localeHelper.getPreferredLocale();
+		return preferredLocale != null ? preferredLocale : localeHelper.getDefaultLocale();
+	}
+
+	@NonNull
+	private static DecimalFormat createDecimalFormat(@NonNull String pattern, int minFractionDigits,
+	                                                 @NonNull Locale locale) {
+		DecimalFormatSymbols symbols = new DecimalFormatSymbols(locale);
+		DecimalFormat decimalFormat = new DecimalFormat(pattern, symbols);
+		decimalFormat.setMinimumFractionDigits(minFractionDigits);
+		decimalFormat.setMinimumIntegerDigits(1);
+		return decimalFormat;
 	}
 
 	public static void setTwelveHoursFormatting(boolean setTwelveHoursFormat, @NonNull Locale locale) {
@@ -333,12 +344,13 @@ public class OsmAndFormatter {
 	public static String getFormattedRoundDistanceKm(float meters, int digits, OsmandApplication ctx) {
 		int mainUnitStr = R.string.km;
 		float mainUnitInMeters = METERS_IN_KILOMETER;
+		Locale locale = getFormatterLocale(ctx);
 		if (digits == 0) {
 			return (int) (meters / mainUnitInMeters + 0.5) + " " + ctx.getString(mainUnitStr); //$NON-NLS-1$
 		} else if (digits == 1) {
-			return fixed1.format(meters / mainUnitInMeters) + " " + ctx.getString(mainUnitStr);
+			return createDecimalFormat("0.0", 1, locale).format(meters / mainUnitInMeters) + " " + ctx.getString(mainUnitStr);
 		} else {
-			return fixed2.format(meters / mainUnitInMeters) + " " + ctx.getString(mainUnitStr);
+			return createDecimalFormat("0.00", 2, locale).format(meters / mainUnitInMeters) + " " + ctx.getString(mainUnitStr);
 		}
 	}
 
@@ -346,7 +358,7 @@ public class OsmAndFormatter {
 		boolean kmAndMeters = app.getSettings().METRIC_SYSTEM.get() == MetricsConstants.KILOMETERS_AND_METERS;
 		int mainUnitStr = kmAndMeters ? R.string.km : R.string.mile;
 		float mainUnitInMeters = kmAndMeters ? METERS_IN_KILOMETER : METERS_IN_ONE_MILE;
-		DecimalFormat df = new DecimalFormat("#.#");
+		DecimalFormat df = createDecimalFormat("#.#", 1, getFormatterLocale(app));
 
 		return df.format(meters / mainUnitInMeters) + " " + app.getString(mainUnitStr);
 	}
