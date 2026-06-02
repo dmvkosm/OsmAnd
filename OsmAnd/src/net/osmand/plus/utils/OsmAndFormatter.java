@@ -255,9 +255,13 @@ public class OsmAndFormatter {
 			unitsStr = app.getString(R.string.int_min);
 			intervalInUnits = (interval / 60f);
 		}
-		String formattedInterval = Algorithms.isInt(intervalInUnits) ?
-				String.format(Locale.US, "%d", (long) intervalInUnits) :
-				String.format("%s", intervalInUnits);
+		String formattedInterval;
+		NumberFormat numberFormat = getNumberFormat(app);
+		if (Algorithms.isInt(intervalInUnits)) {
+			formattedInterval = numberFormat.format((long) intervalInUnits);
+		} else {
+			formattedInterval = numberFormat.format(intervalInUnits);
+		}
 		return formattedInterval + " " + unitsStr;
 	}
 
@@ -268,7 +272,10 @@ public class OsmAndFormatter {
 
 	public static String getFormattedPredictionTime(@NonNull OsmandApplication app, double interpolationValue) {
 		double seconds = interpolationValue / 100.0;
-		String formattedValue = String.format(seconds % 1 == 0 ? "%.0f" : "%.1f", seconds);
+		NumberFormat numberFormat = getNumberFormat(app);
+		numberFormat.setMaximumFractionDigits(seconds % 1 == 0 ? 0 : 1);
+		numberFormat.setMinimumFractionDigits(seconds % 1 == 0 ? 0 : 1);
+		String formattedValue = numberFormat.format(seconds);
 		return app.getString(R.string.ltr_or_rtl_combine_via_space, formattedValue, app.getString(R.string.shared_string_sec));
 	}
 
