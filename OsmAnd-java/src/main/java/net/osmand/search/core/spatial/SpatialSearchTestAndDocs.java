@@ -174,6 +174,21 @@ public class SpatialSearchTestAndDocs {
 	 */
 	public static void main(String[] args) throws IOException, InterruptedException {				
 		SpatialTextSearchSettings settings = SpatialTextSearchSettings.defaultSettings();
+		String usePipeline = System.getProperty("spatial.usePipeline");
+		if (usePipeline != null) {
+			settings.DEV_USE_PIPELINE = Boolean.parseBoolean(usePipeline);
+			System.out.println("DEV_USE_PIPELINE = " + settings.DEV_USE_PIPELINE);
+		}
+		String checkExcluded = System.getProperty("spatial.checkExcluded");
+		if (checkExcluded != null) {
+			SpatialStagePipeline.CHECK_EXCLUDED = Boolean.parseBoolean(checkExcluded);
+			System.out.println("CHECK_EXCLUDED = " + SpatialStagePipeline.CHECK_EXCLUDED);
+		}
+		String excludeMasks = System.getProperty("spatial.excludeMasks");
+		if (excludeMasks != null) {
+			SpatialStagePipeline.EXCLUDE_MASKS = Integer.parseInt(excludeMasks);
+			System.out.println("EXCLUDE_MASKS = " + SpatialStagePipeline.EXCLUDE_MASKS);
+		}
 		File folder = new File(System.getProperty("maps.dir"));
 		LatLon location = null;
 		String pattern = "Germany_b";

@@ -172,7 +172,13 @@ public class SpatialTextSearch {
 		////////////////////////////////////////
 
 		//////// PIPELINE ALGORITHM ////////
-		public int[] MAX_PIPELINE_STAGE_TO_STOP = new int[] {100, 500};
+		/** Stop pipeline as soon as one full-coverage non-category result is validated. */
+		public boolean PIPELINE_STOP_ON_FIRST_COMPLETE = true;
+		/** Rare-first token chain joins instead of stage-2 all×all self-join. */
+		public boolean DEV_USE_INCREMENTAL_PIPELINE = false;
+		/** Print full mask distribution in prepare (expensive; debug only). */
+		public boolean DEV_VERBOSE_MASK_STATS = false;
+		public int[] MAX_PIPELINE_STAGE_TO_STOP = new int[] {1, 10, 100, 500, 500};
 		
 		
 		public double evalEnlargeBoundary(Map<Integer, Double> mp, double dim) {

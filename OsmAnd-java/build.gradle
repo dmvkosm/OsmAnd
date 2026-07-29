@@ -148,3 +148,23 @@ dependencies {
 	implementation fileTree(include: ['*.jar'], dir: 'libs')
 }
 
+tasks.register('runSpatialSearchTest', JavaExec) {
+	group = 'verification'
+	description = 'Run SpatialSearchTestAndDocs integration test (requires maps in maps.dir)'
+	dependsOn compileJava, processResources, collectExternalResources, ':OsmAnd-shared:jvmJar'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'net.osmand.search.core.spatial.SpatialSearchTestAndDocs'
+	def mapsDir = findProperty('mapsDir') ?: "${rootProject.projectDir}/maps"
+	systemProperty 'maps.dir', mapsDir
+	if (findProperty('usePipeline') != null) {
+		systemProperty 'spatial.usePipeline', findProperty('usePipeline')
+	}
+	if (findProperty('checkExcluded') != null) {
+		systemProperty 'spatial.checkExcluded', findProperty('checkExcluded')
+	}
+	if (findProperty('excludeMasks') != null) {
+		systemProperty 'spatial.excludeMasks', findProperty('excludeMasks')
+	}
+	jvmArgs '-Xmx6g', '-Dfile.encoding=UTF-8'
+}
+

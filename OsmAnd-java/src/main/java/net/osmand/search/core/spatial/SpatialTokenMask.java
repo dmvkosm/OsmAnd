@@ -76,6 +76,13 @@ public final class SpatialTokenMask {
 		return (mask & ~(3L << shift)) | ((state & 3L) << shift);
 	}
 
+	/** Mask with only one token bit kept (for incremental join — mirrors legacy one-atom add). */
+	public static long projectMaskForToken(long mask, int tokenIdx) {
+		long header = mask & ((1L << HEADER_BITS) - 1);
+		long state = getTokenState(mask, tokenIdx);
+		return header | (state << (tokenIdx * 2 + HEADER_BITS));
+	}
+
 	public static long getTokenState(long mask, int tokenIdx) {
 		return (mask >>> (tokenIdx * 2 + HEADER_BITS)) & 3L;
 	}
@@ -137,6 +144,26 @@ public final class SpatialTokenMask {
 		long poi = p1 == 0 ? p2
 				: (p2 == 0 ? p1 : (p1 == POI_OBJECT && p2 == POI_OBJECT ? POI_OBJECT : POI_CATEGORY));
 		return atomic | (poi << 2) | tokens;
+	}
+
+	/** Like {@link #combine} but never saturates atomic header to {@link #ATOMIC_TWO}. */
+	public static long combinePartial(long m1, long m2) {
+		long or = m1 | m2;
+		long exact = or & TOKEN_LOW_BITS;
+		long ambiguous = (or >>> 1) & TOKEN_LOW_BITS & ~exact;
+		long tokens = exact | (ambiguous << 1);
+
+		long a1 = m1 & 3L, a2 = m2 & 3L;
+		long atomic = a1 == 0 ? a2 : (a2 == 0 ? a1 : ATOMIC_ONE);
+		long p1 = (m1 >>> 2) & 3L, p2 = (m2 >>> 2) & 3L;
+		long poi = p1 == 0 ? p2
+				: (p2 == 0 ? p1 : (p1 == POI_OBJECT && p2 == POI_OBJECT ? POI_OBJECT : POI_CATEGORY));
+		return atomic | (poi << 2) | tokens;
+	}
+
+	/** Partial chains must not carry ATOMIC_TWO or later atomic joins are all rejected. */
+	public static long demoteAtomicSaturation(long mask) {
+		return (mask & 3L) == ATOMIC_TWO ? (mask & ~3L) | ATOMIC_ONE : mask;
 	}
 
 	// ------------------------------------------------------------------
@@ -248,6 +275,25 @@ public final class SpatialTokenMask {
 					continue;
 				}
 				long c = combine(v1, v2);
+				int covered = countCoveredTokens(c);
+				if (covered > bestCovered) {
+					bestCovered = covered;
+					best = new long[] { c, v1, v2 };
+				}
+			}
+		}
+		return best;
+	}
+
+	public static long[] bestAllowedCombinePartial(long[] variants1, long[] variants2) {
+		long[] best = null;
+		int bestCovered = -1;
+		for (long v1 : variants1) {
+			for (long v2 : variants2) {
+				if (!allowed(v1, v2)) {
+					continue;
+				}
+				long c = combinePartial(v1, v2);
 				int covered = countCoveredTokens(c);
 				if (covered > bestCovered) {
 					bestCovered = covered;
