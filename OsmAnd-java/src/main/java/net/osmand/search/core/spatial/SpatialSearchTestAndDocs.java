@@ -179,6 +179,11 @@ public class SpatialSearchTestAndDocs {
 			settings.DEV_USE_PIPELINE = Boolean.parseBoolean(usePipeline);
 			System.out.println("DEV_USE_PIPELINE = " + settings.DEV_USE_PIPELINE);
 		}
+		String useIncremental = System.getProperty("spatial.useIncrementalPipeline");
+		if (useIncremental != null) {
+			settings.DEV_USE_INCREMENTAL_PIPELINE = Boolean.parseBoolean(useIncremental);
+			System.out.println("DEV_USE_INCREMENTAL_PIPELINE = " + settings.DEV_USE_INCREMENTAL_PIPELINE);
+		}
 		String checkExcluded = System.getProperty("spatial.checkExcluded");
 		if (checkExcluded != null) {
 			SpatialStagePipeline.CHECK_EXCLUDED = Boolean.parseBoolean(checkExcluded);

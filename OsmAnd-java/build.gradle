@@ -159,6 +159,9 @@ tasks.register('runSpatialSearchTest', JavaExec) {
 	if (findProperty('usePipeline') != null) {
 		systemProperty 'spatial.usePipeline', findProperty('usePipeline')
 	}
+	if (findProperty('useIncrementalPipeline') != null) {
+		systemProperty 'spatial.useIncrementalPipeline', findProperty('useIncrementalPipeline')
+	}
 	if (findProperty('checkExcluded') != null) {
 		systemProperty 'spatial.checkExcluded', findProperty('checkExcluded')
 	}
