@@ -685,6 +685,15 @@ public class SpatialStagePipeline {
 			SpatialObjectRes existing = prep.objectsById.get(atom.id);
 			if (existing != null) {
 				existing.mergeSame(atom, tokenIdx);
+				if (existing.variants != null) {
+					// variants were computed in prepare() before this token was read;
+					// deferred tokens are never inside duplicate groups, so all variants
+					// receive the same new token state as mainMask
+					long state = SpatialTokenMask.getTokenState(existing.mainMask, tokenIdx);
+					for (int i = 0; i < existing.variants.length; i++) {
+						existing.variants[i] = SpatialTokenMask.setTokenState(existing.variants[i], tokenIdx, state);
+					}
+				}
 			} else {
 				prep.objectsById.put(atom.id, new SpatialObjectRes(prep.tokens.size(), atom, tokenIdx));
 			}
@@ -889,6 +898,9 @@ public class SpatialStagePipeline {
 			if (ctx.settings.DEV_VERBOSE_MASK_STATS) {
 				SpatialStagePipelineStats.printTree(prep);
 			}
+		}
+		if (ctx.settings.DEV_MASK_CLASS_EXPERIMENT) {
+			SpatialMaskClassExperiment.run(ctx, prep);
 		}
 		time = System.nanoTime();
 		if (stage++ >= MAX_STEPS || ctx.isCancelled()) {

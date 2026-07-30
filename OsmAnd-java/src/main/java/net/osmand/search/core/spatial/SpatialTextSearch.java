@@ -198,6 +198,8 @@ public class SpatialTextSearch {
 		 * and name tokens as chain seeds).
 		 */
 		public int OPTIM_DEFER_READ_TOKEN_ATOMS_LIMIT = 0;
+		/** Run mask-class cost-based DP experiment after prepare (see SpatialMaskClassExperiment). */
+		public boolean DEV_MASK_CLASS_EXPERIMENT = false;
 		public boolean DEV_DEBUG_INCREMENTAL_JOIN = false;
 		public int[] MAX_PIPELINE_STAGE_TO_STOP = new int[] {1, 10, 100, 500, 500};
 		

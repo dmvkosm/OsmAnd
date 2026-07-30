@@ -189,6 +189,11 @@ public class SpatialSearchTestAndDocs {
 			settings.OPTIM_DEFER_READ_TOKEN_ATOMS_LIMIT = Integer.parseInt(deferReadLimit);
 			System.out.println("OPTIM_DEFER_READ_TOKEN_ATOMS_LIMIT = " + settings.OPTIM_DEFER_READ_TOKEN_ATOMS_LIMIT);
 		}
+		String maskClassExperiment = System.getProperty("spatial.maskClassExperiment");
+		if (maskClassExperiment != null) {
+			settings.DEV_MASK_CLASS_EXPERIMENT = Boolean.parseBoolean(maskClassExperiment);
+			System.out.println("DEV_MASK_CLASS_EXPERIMENT = " + settings.DEV_MASK_CLASS_EXPERIMENT);
+		}
 		String checkExcluded = System.getProperty("spatial.checkExcluded");
 		if (checkExcluded != null) {
 			SpatialStagePipeline.CHECK_EXCLUDED = Boolean.parseBoolean(checkExcluded);
