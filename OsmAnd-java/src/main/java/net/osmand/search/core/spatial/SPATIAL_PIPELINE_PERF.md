@@ -9,6 +9,7 @@ Target branch: **`spatialPipeline-mask-fixes`** → then **`spatialPipeline`**.
 |-------|---------|---------|
 | Rare-first incremental token chain | `DEV_USE_INCREMENTAL_PIPELINE` | `true` |
 | Lazy read of huge tokens (rua, travessa…) | `OPTIM_DEFER_READ_TOKEN_ATOMS_LIMIT` | `0` (off) |
+| Mask-class cost-based join planner | `DEV_USE_MASK_CLASS_PIPELINE` | `false` |
 
 **Problem:** multi-token address queries spend ~2 s in the match phase decoding and collator-matching every atom of common words (`rua` ≈ 134k in Portugal).
 
@@ -79,6 +80,33 @@ WARM RUN 3: total ... ms | Search Stats ...
 ### 4. Other regression queries
 
 See `SPATIAL_PIPELINE_MASK.md` — `4 8 ave paterson`, Philadelphia duplicate words, Dickinson TX.
+Any query can be passed via `-Pquery="..."` (overrides the hardcoded one).
+
+### 5. Mask-class join planner (`SpatialMaskClassExperiment`)
+
+Alternative compute path answering "what is the theoretical minimum of the intersection
+phase". Objects are grouped into mask classes (equal token masks are combinatorially
+interchangeable); a cost-based DP over mask states picks (state × class) spatial joins
+from a priority queue (goal first: tokens still missing, cost second), re-running
+downstream joins as deltas when a state gains new partials. Join semantics mirror
+`join()` exactly (variants, `expandContestedTokens`, `acceptPairSemantic`).
+
+```bash
+./gradlew :OsmAnd-java:runSpatialSearchTest -PmapsDir=... -PusePipeline=true \
+  -PmaskClassPipeline=true -PrepeatSearch=3
+```
+
+Measured (Portugal map, warm):
+
+| Query | joins | Z crossings | join phase |
+|-------|-------|-------------|------------|
+| Travessa Santo António Rua Joaquim Ribeiro Carvalho Portugal | 2 | 3 | ~11 ms |
+| rua santo antonio rua joaquim ribeiro portugal (dup words) | 2 | 5 | ~9 ms |
+| rua joaquim ribeiro carvalho porto | 6 | 33 | ~43 ms |
+
+Same top result as the incremental chain on the main query (`39.7412, -8.8013`).
+Stats-only mode (prints classes/joins without replacing the pipeline):
+`-PmaskClassExperiment=true`.
 
 ## Gradle properties
 
@@ -88,6 +116,9 @@ See `SPATIAL_PIPELINE_MASK.md` — `4 8 ave paterson`, Philadelphia duplicate wo
 | `-PusePipeline=` | `DEV_USE_PIPELINE` |
 | `-PuseIncrementalPipeline=` | `DEV_USE_INCREMENTAL_PIPELINE` |
 | `-PdeferReadLimit=` | `OPTIM_DEFER_READ_TOKEN_ATOMS_LIMIT` |
+| `-PmaskClassPipeline=` | `DEV_USE_MASK_CLASS_PIPELINE` |
+| `-PmaskClassExperiment=` | `DEV_MASK_CLASS_EXPERIMENT` (stats only) |
+| `-Pquery=` | query override |
 | `-PrepeatSearch=` | warm JVM re-runs after first search |
 
 ## Files touched (perf commits only)

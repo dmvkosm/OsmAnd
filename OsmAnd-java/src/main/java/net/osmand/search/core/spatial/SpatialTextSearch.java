@@ -200,6 +200,8 @@ public class SpatialTextSearch {
 		public int OPTIM_DEFER_READ_TOKEN_ATOMS_LIMIT = 0;
 		/** Run mask-class cost-based DP experiment after prepare (see SpatialMaskClassExperiment). */
 		public boolean DEV_MASK_CLASS_EXPERIMENT = false;
+		/** Replace step-2+ joins with the mask-class planned join (results incl. fallback). */
+		public boolean DEV_USE_MASK_CLASS_PIPELINE = false;
 		public boolean DEV_DEBUG_INCREMENTAL_JOIN = false;
 		public int[] MAX_PIPELINE_STAGE_TO_STOP = new int[] {1, 10, 100, 500, 500};
 		

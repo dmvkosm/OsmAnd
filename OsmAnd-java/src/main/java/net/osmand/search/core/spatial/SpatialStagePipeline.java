@@ -922,6 +922,15 @@ public class SpatialStagePipeline {
 			return prep.combinations;
 		}
 
+		// STEP 2 alternative: mask-class planned joins produce final combinations directly.
+		// Note: like the regular pipeline, only full-coverage combinations become results;
+		// fallback partials are collected for diagnostics (result assembly is full-cover only).
+		if (ctx.settings.DEV_USE_MASK_CLASS_PIPELINE) {
+			List<SpatialObjectRes> covers = SpatialMaskClassExperiment.runJoin(ctx, prep, null, false);
+			validateStageAndFinish(prep, null, covers, stage, time);
+			return prep.combinations;
+		}
+
 		// STEP 2: pair discovery — incremental token chain (fast) or all×all self-join
 		boolean exit;
 		if (ctx.settings.DEV_USE_INCREMENTAL_PIPELINE) {

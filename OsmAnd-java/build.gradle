@@ -177,6 +177,12 @@ tasks.register('runSpatialSearchTest', JavaExec) {
 	if (findProperty('maskClassExperiment') != null) {
 		systemProperty 'spatial.maskClassExperiment', findProperty('maskClassExperiment')
 	}
+	if (findProperty('maskClassPipeline') != null) {
+		systemProperty 'spatial.maskClassPipeline', findProperty('maskClassPipeline')
+	}
+	if (findProperty('query') != null) {
+		systemProperty 'spatial.query', findProperty('query')
+	}
 	jvmArgs '-Xmx6g', '-Dfile.encoding=UTF-8'
 }
 

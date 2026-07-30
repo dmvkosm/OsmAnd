@@ -495,7 +495,9 @@ public class SpatialSearchContext {
 	 */
 	private boolean deferTokenParse(SpatialSearchToken t, List<PrefixNameValue> matchedPrefixes) {
 		int limit = settings.OPTIM_DEFER_READ_TOKEN_ATOMS_LIMIT;
-		if (limit <= 0 || !settings.DEV_USE_PIPELINE || !settings.DEV_USE_INCREMENTAL_PIPELINE) {
+		if (limit <= 0 || !settings.DEV_USE_PIPELINE || !settings.DEV_USE_INCREMENTAL_PIPELINE
+				|| settings.DEV_USE_MASK_CLASS_PIPELINE) {
+			// deferred reads are resolved inside the incremental chain only
 			return false;
 		}
 		if (t.categoryMatchMode || t.likelyPartOfBuilding()) {

@@ -194,6 +194,11 @@ public class SpatialSearchTestAndDocs {
 			settings.DEV_MASK_CLASS_EXPERIMENT = Boolean.parseBoolean(maskClassExperiment);
 			System.out.println("DEV_MASK_CLASS_EXPERIMENT = " + settings.DEV_MASK_CLASS_EXPERIMENT);
 		}
+		String maskClassPipeline = System.getProperty("spatial.maskClassPipeline");
+		if (maskClassPipeline != null) {
+			settings.DEV_USE_MASK_CLASS_PIPELINE = Boolean.parseBoolean(maskClassPipeline);
+			System.out.println("DEV_USE_MASK_CLASS_PIPELINE = " + settings.DEV_USE_MASK_CLASS_PIPELINE);
+		}
 		String checkExcluded = System.getProperty("spatial.checkExcluded");
 		if (checkExcluded != null) {
 			SpatialStagePipeline.CHECK_EXCLUDED = Boolean.parseBoolean(checkExcluded);
@@ -614,7 +619,13 @@ public class SpatialSearchTestAndDocs {
 //		pattern ="Us_penn";
 //		query = "226 Wilkes-Barre Township Boulevard Wilkes-Barre";
 //		query = "226 Wilkes-Barre Township Boulevard ";// 116894954
-		
+
+		// external override for scripted regression runs
+		String queryOverride = System.getProperty("spatial.query");
+		if (queryOverride != null && !queryOverride.isEmpty()) {
+			query = queryOverride;
+			System.out.println("QUERY = " + query);
+		}
 		long t = System.nanoTime();
 
 		List<BinaryMapIndexReader> ls = new ArrayList<BinaryMapIndexReader>();
