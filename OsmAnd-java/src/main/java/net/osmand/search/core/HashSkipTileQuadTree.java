@@ -361,6 +361,10 @@ public class HashSkipTileQuadTree<T> {
 	}
 
 	public int build() {
+		if (modified != null && modified.isEmpty() && zoomBuckets != null) {
+			// already built and unchanged - avoid re-sorting all tile entries
+			return tileEntries.size();
+		}
 		if (modified != null) {
 			List<TileEntry<T>> tileEntries = new ArrayList<>();
 			for (TileEntry<T> e : this.tileEntries) {

@@ -172,7 +172,38 @@ public class SpatialTextSearch {
 		////////////////////////////////////////
 
 		//////// PIPELINE ALGORITHM ////////
-		public int[] MAX_PIPELINE_STAGE_TO_STOP = new int[] {100, 500};
+		/** Stop pipeline as soon as one full-coverage non-category result is validated. */
+		public boolean PIPELINE_STOP_ON_FIRST_COMPLETE = true;
+		/** Rare-first token chain joins instead of stage-2 all×all self-join. */
+		public boolean DEV_USE_INCREMENTAL_PIPELINE = true;
+		/** Print full mask distribution in prepare (expensive; debug only). */
+		public boolean DEV_VERBOSE_MASK_STATS = false;
+		/**
+		 * Lazy read of huge tokens (common words like 'rua', 'street').
+		 *
+		 * Match phase cost is dominated by collator checks while assembling NameIndexAtom
+		 * from prefix-index blocks. Tokens above this prefix-atom count threshold skip
+		 * that work in readAtoms(); their PrefixNameValue blocks stay in deferredReads.
+		 *
+		 * The incremental pipeline then joins rare tokens first. Before each deferred
+		 * token is joined, readDeferredTokenAtoms() parses only atoms whose bbox31
+		 * intersects surviving partial bboxes from the chain (cheap int compares).
+		 *
+		 * Correctness: multi-word names ('Rua Joaquim Ribeiro de Carvalho') already
+		 * cross-add the common-word atom via otherTokens when rare words are read, so
+		 * the final intersection does not depend on reading every standalone 'rua'.
+		 *
+		 * Threshold 0 = disabled. Requires DEV_USE_PIPELINE + DEV_USE_INCREMENTAL_PIPELINE.
+		 * Suggested production value: ~15_000 (defers santo/travessa/rua, keeps portugal
+		 * and name tokens as chain seeds).
+		 */
+		public int OPTIM_DEFER_READ_TOKEN_ATOMS_LIMIT = 0;
+		/** Run mask-class cost-based DP experiment after prepare (see SpatialMaskClassExperiment). */
+		public boolean DEV_MASK_CLASS_EXPERIMENT = false;
+		/** Replace step-2+ joins with the mask-class planned join (results incl. fallback). */
+		public boolean DEV_USE_MASK_CLASS_PIPELINE = false;
+		public boolean DEV_DEBUG_INCREMENTAL_JOIN = false;
+		public int[] MAX_PIPELINE_STAGE_TO_STOP = new int[] {1, 10, 100, 500, 500};
 		
 		
 		public double evalEnlargeBoundary(Map<Integer, Double> mp, double dim) {

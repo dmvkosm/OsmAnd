@@ -795,46 +795,66 @@ public class SpatialSearchResultsList implements Comparable<SpatialSearchResults
 
 	private boolean acceptIntersection(SpatialSearchContext ctx,  SpatialSearchResultsList parent, int pindx, SpatialSearchToken token, NameIndexAtom a,
 			int[] typeIntersection) {
+		if (parent == null) {
+			typeIntersection[0] = 0;
+			return true;
+		}
+		SpatialSearchToken[] pt = parent.tokens;
+		NameIndexAtom[] pa = new NameIndexAtom[parent.tCount];
+		for (int i = 0; i < parent.tCount; i++) {
+			pa[i] = parent.linearResults.get(pindx * parent.tCount + i);
+		}
+		return acceptIntersectionImpl(ctx, pt, pa, parent.typeIntersections.get(pindx), token, a, typeIntersection);
+	}
+
+	/**
+	 * Shared semantic intersection rules for legacy join and pipeline incremental join.
+	 * {@code parentTokens}/{@code parentAtoms} are newest-first (parent.tokens order).
+	 */
+	static boolean acceptIntersectionImpl(SpatialSearchContext ctx, SpatialSearchToken[] parentTokens,
+			NameIndexAtom[] parentAtoms, int parentStoredType, SpatialSearchToken newToken, NameIndexAtom newAtom,
+			int[] typeIntersection) {
 		SpatialTextSearchSettings settings = ctx.settings;
+		int parentCount = parentTokens != null ? parentTokens.length : 0;
 		typeIntersection[0] = -1;
 		// 1. speed up for same id
 		// Don't allow intersect potential building with other object
-		for (int i = 0; parent != null && i < parent.tCount; i++) {
-			NameIndexAtom pa = parent.linearResults.get(pindx * parent.tCount + i);
-			if (pa.id == a.id) {
-				typeIntersection[0] = parent.typeIntersections.get(pindx);
+		for (int i = 0; i < parentCount; i++) {
+			NameIndexAtom pa = parentAtoms[i];
+			if (pa.id == newAtom.id) {
+				typeIntersection[0] = parentStoredType;
 				continue;
 			}
 			// pa and a using same tokens for street & house but different streets / poi same as below
-			if (parent.tokens[i].originalOrder == a.buildingOrRefInd) {
+			if (parentTokens[i].originalOrder == newAtom.buildingOrRefInd) {
 				return false;
-			} else if (pa.buildingOrRefInd == token.originalOrder) {
+			} else if (pa.buildingOrRefInd == newToken.originalOrder) {
 				return false;
 			}
 			// don't intersect building with other street except if street-building is city
-			if ((pa.buildingOrRefInd >= 0) && a.isStreetBuilding() && !pa.isCityStreetName()) {
+			if ((pa.buildingOrRefInd >= 0) && newAtom.isStreetBuilding() && !pa.isCityStreetName()) {
 				return false;
-			} else if ((a.buildingOrRefInd >= 0) && pa.isStreetBuilding() && !a.isCityStreetName()) {
+			} else if ((newAtom.buildingOrRefInd >= 0) && pa.isStreetBuilding() && !newAtom.isCityStreetName()) {
 				return false; 
 			}
 			// if poi doesn't have bbox don't intersect or add bbox! (transport stops take street names)
 			if (!ctx.settings.ALLOW_HOUSE_POI_TYPE_INTERSECTION) {
-				if ((pa.buildingOrRefInd >= 0) && a.isPOI() && a.coords.bbox31 == null) {
+				if ((pa.buildingOrRefInd >= 0) && newAtom.isPOI() && newAtom.coords.bbox31 == null) {
 					return false;
-				} else if ((a.buildingOrRefInd >= 0) && pa.isPOI() && pa.coords.bbox31 == null) {
+				} else if ((newAtom.buildingOrRefInd >= 0) && pa.isPOI() && pa.coords.bbox31 == null) {
 					return false;
 				}
 			}
 //			
 		}
 		// 2. Duplicate words in query
-		for (int i = 0; parent != null && i < parent.tCount; i++) {
-			NameIndexAtom pa = parent.linearResults.get(pindx * parent.tCount + i);
-			if (pa.id == a.id && tokens[0].word.equals(tokens[i + 1].word) && 
-					!pa.isBuilding() && !a.isBuilding()) {
+		for (int i = 0; i < parentCount; i++) {
+			NameIndexAtom pa = parentAtoms[i];
+			if (pa.id == newAtom.id && newToken.word.equals(parentTokens[i].word) && 
+					!pa.isBuilding() && !newAtom.isBuilding()) {
 				// NameIndexAtom supports "<word> <...> <word>" but it's not present in DATA now
-				int indexOf = a.name.indexOf(tokens[0].word, pindx);
-				if (indexOf != -1 && a.name.indexOf(tokens[0].word, indexOf + 1) >= 0) {
+				int indexOf = newAtom.name.indexOf(newToken.word);
+				if (indexOf != -1 && newAtom.name.indexOf(newToken.word, indexOf + 1) >= 0) {
 					// duplicate name in object
 //					System.out.println("Duplicate word  " + a.name);
 				} else {
@@ -842,17 +862,17 @@ public class SpatialSearchResultsList implements Comparable<SpatialSearchResults
 				}
 			}
 		}
-		SpatialSearchToken poiTypeToken = tokens[0];
-		NameIndexAtom poiType = a.isPoiCategory() ? a : null;
-		boolean buildingPresent = a.isBuilding();
-		for (int i = 0; parent != null && i < parent.tCount; i++) {
-			NameIndexAtom pa = parent.linearResults.get(pindx * parent.tCount + i);
+		SpatialSearchToken poiTypeToken = newToken;
+		NameIndexAtom poiType = newAtom.isPoiCategory() ? newAtom : null;
+		boolean buildingPresent = newAtom.isBuilding();
+		for (int i = 0; i < parentCount; i++) {
+			NameIndexAtom pa = parentAtoms[i];
 			if (pa.isBuilding()) {
 				buildingPresent = true;
 			} else if (pa.isPoiCategory()) {
 				if (poiType == null || pa.id == poiType.id) {
 					poiType = pa;
-					poiTypeToken = parent.tokens[i];
+					poiTypeToken = parentTokens[i];
 				} else {
 					// no 2 poi categories for now (vegan cafe)
 					return false;
@@ -873,9 +893,9 @@ public class SpatialSearchResultsList implements Comparable<SpatialSearchResults
 		if (!settings.DEV_USE_SKIP_HASH_TREE) {
 			// not needed for skip hash tree to be deleted
 			boolean intersect = true;
-			for (int i = 0; parent != null && i < parent.tCount; i++) {
-				NameIndexAtom pa = parent.linearResults.get(pindx * parent.tCount + i);
-				if (!pa.coords.intersects(a.coords)) {
+			for (int i = 0; i < parentCount; i++) {
+				NameIndexAtom pa = parentAtoms[i];
+				if (!pa.coords.intersects(newAtom.coords)) {
 					intersect = false;
 					break;
 				}
@@ -889,38 +909,38 @@ public class SpatialSearchResultsList implements Comparable<SpatialSearchResults
 		// we check that poi category is complete in the end 
 		boolean poiCategoryOnMatchingWord = false;
 		boolean poiCategoryOnNumber = false;
-		if (a.atomicObject()) {
-			atomObjs.put(a.id, a);
+		if (newAtom.atomicObject()) {
+			atomObjs.put(newAtom.id, newAtom);
 		}
-		if (!a.isPoiCategory()) {
-			poiCategoryOnMatchingWord |= token.hasPoiCategoryKeys();
+		if (!newAtom.isPoiCategory()) {
+			poiCategoryOnMatchingWord |= newToken.hasPoiCategoryKeys();
 		} else {
-			poiCategoryOnNumber = token.likelyPartOfBuilding() || token.getMainNumber() > 0;
+			poiCategoryOnNumber = newToken.likelyPartOfBuilding() || newToken.getMainNumber() > 0;
 		}
 		
 		boolean duplicateWord = false;
-		for (int i = 0; parent != null && i < parent.tCount; i++) {
-			NameIndexAtom pa = parent.linearResults.get(pindx * parent.tCount + i);
-			if (pa.id == a.id) {
+		for (int i = 0; i < parentCount; i++) {
+			NameIndexAtom pa = parentAtoms[i];
+			if (pa.id == newAtom.id) {
 				continue;
 			}
 			// check that token is reused in parent
 			// ignore every object that has this name already (except duplicate words && numbers assigned to building)
-			if (!tokens[0].word.equals(parent.tokens[i].word) && !duplicateWord) {
-				NameIndexAtom existing = parent.tokens[i].index.get(a.id);
+			if (!newToken.word.equals(parentTokens[i].word) && !duplicateWord) {
+				NameIndexAtom existing = parentTokens[i].index.get(newAtom.id);
 				// it might be duplicate word which is not explored yet see test 'SW Summit Valley Ln, Lee's Summit'
 				// 'valley' x 'ln' x 'lee' (already has combination of 2) x 'summit' (breaks here) 'summit'
 				if (existing != null && !existing.isBuilding() && !existing.isPOIRef()) {
 					return false;
 				}
-				existing = tokens[0].index.get(pa.id);
+				existing = newToken.index.get(pa.id);
 				if (existing != null && !existing.isBuilding() && !existing.isPOIRef()) {
 					return false;
 				}
 			} else {
 				duplicateWord = true;
 			}
-			SpatialSearchToken parentToken = parent.tokens[i];
+			SpatialSearchToken parentToken = parentTokens[i];
 			if (!pa.isPoiCategory()) {
 				poiCategoryOnMatchingWord |= parentToken.hasPoiCategoryKeys();
 			} else {
@@ -995,7 +1015,6 @@ public class SpatialSearchResultsList implements Comparable<SpatialSearchResults
 		
 		return true;
 	}
-	
 
 	@Override
 	public int compareTo(SpatialSearchResultsList o) {

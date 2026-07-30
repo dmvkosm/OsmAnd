@@ -174,6 +174,41 @@ public class SpatialSearchTestAndDocs {
 	 */
 	public static void main(String[] args) throws IOException, InterruptedException {				
 		SpatialTextSearchSettings settings = SpatialTextSearchSettings.defaultSettings();
+		String usePipeline = System.getProperty("spatial.usePipeline");
+		if (usePipeline != null) {
+			settings.DEV_USE_PIPELINE = Boolean.parseBoolean(usePipeline);
+			System.out.println("DEV_USE_PIPELINE = " + settings.DEV_USE_PIPELINE);
+		}
+		String useIncremental = System.getProperty("spatial.useIncrementalPipeline");
+		if (useIncremental != null) {
+			settings.DEV_USE_INCREMENTAL_PIPELINE = Boolean.parseBoolean(useIncremental);
+			System.out.println("DEV_USE_INCREMENTAL_PIPELINE = " + settings.DEV_USE_INCREMENTAL_PIPELINE);
+		}
+		String deferReadLimit = System.getProperty("spatial.deferReadLimit");
+		if (deferReadLimit != null) {
+			settings.OPTIM_DEFER_READ_TOKEN_ATOMS_LIMIT = Integer.parseInt(deferReadLimit);
+			System.out.println("OPTIM_DEFER_READ_TOKEN_ATOMS_LIMIT = " + settings.OPTIM_DEFER_READ_TOKEN_ATOMS_LIMIT);
+		}
+		String maskClassExperiment = System.getProperty("spatial.maskClassExperiment");
+		if (maskClassExperiment != null) {
+			settings.DEV_MASK_CLASS_EXPERIMENT = Boolean.parseBoolean(maskClassExperiment);
+			System.out.println("DEV_MASK_CLASS_EXPERIMENT = " + settings.DEV_MASK_CLASS_EXPERIMENT);
+		}
+		String maskClassPipeline = System.getProperty("spatial.maskClassPipeline");
+		if (maskClassPipeline != null) {
+			settings.DEV_USE_MASK_CLASS_PIPELINE = Boolean.parseBoolean(maskClassPipeline);
+			System.out.println("DEV_USE_MASK_CLASS_PIPELINE = " + settings.DEV_USE_MASK_CLASS_PIPELINE);
+		}
+		String checkExcluded = System.getProperty("spatial.checkExcluded");
+		if (checkExcluded != null) {
+			SpatialStagePipeline.CHECK_EXCLUDED = Boolean.parseBoolean(checkExcluded);
+			System.out.println("CHECK_EXCLUDED = " + SpatialStagePipeline.CHECK_EXCLUDED);
+		}
+		String excludeMasks = System.getProperty("spatial.excludeMasks");
+		if (excludeMasks != null) {
+			SpatialStagePipeline.EXCLUDE_MASKS = Integer.parseInt(excludeMasks);
+			System.out.println("EXCLUDE_MASKS = " + SpatialStagePipeline.EXCLUDE_MASKS);
+		}
 		File folder = new File(System.getProperty("maps.dir"));
 		LatLon location = null;
 		String pattern = "Germany_b";
@@ -584,7 +619,13 @@ public class SpatialSearchTestAndDocs {
 //		pattern ="Us_penn";
 //		query = "226 Wilkes-Barre Township Boulevard Wilkes-Barre";
 //		query = "226 Wilkes-Barre Township Boulevard ";// 116894954
-		
+
+		// external override for scripted regression runs
+		String queryOverride = System.getProperty("spatial.query");
+		if (queryOverride != null && !queryOverride.isEmpty()) {
+			query = queryOverride;
+			System.out.println("QUERY = " + query);
+		}
 		long t = System.nanoTime();
 
 		List<BinaryMapIndexReader> ls = new ArrayList<BinaryMapIndexReader>();
@@ -605,6 +646,16 @@ public class SpatialSearchTestAndDocs {
 		SpatialPoiSearch poiSearch = new SpatialPoiSearch(poiTypes);
 		SpatialSearchContext searchContext = new SpatialSearchContext(settings, ls, poiSearch, location);
 		SpatialSearchResults rs = a.searchTest(query, searchContext, 10000);
+		int repeatSearch = Integer.parseInt(System.getProperty("spatial.repeatSearch", "0"));
+		for (int rep = 1; rep <= repeatSearch; rep++) {
+			// warm JVM re-run: honest steady-state timing (OsmAnd app runs warm)
+			searchContext = new SpatialSearchContext(settings, ls, poiSearch, location);
+			searchContext.stats.printLogs = false;
+			long nt = System.nanoTime();
+			rs = a.searchTest(query, searchContext, 1);
+			System.out.printf("WARM RUN %d: total %.1f ms | %s\n", rep, (System.nanoTime() - nt) / 1e6,
+					searchContext.stats);
+		}
 		SpatialSearchResult mainResult = rs.getFirstResult();
 		if (mainResult != null && mainResult.matchedTokens() < rs.tokens.size() - 2) {
 			// another way to check to check to get mainResult - boundary object

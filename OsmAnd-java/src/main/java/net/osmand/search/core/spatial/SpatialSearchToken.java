@@ -63,6 +63,11 @@ public class SpatialSearchToken {
 	
 	TLongObjectHashMap<NameIndexAtom> indexByOsmIds = new TLongObjectHashMap<>();
 	TIntHashSet deletedAtoms = new TIntHashSet();
+
+	/** Set in readAtoms when this token is deferred; cleared after readDeferredTokenAtoms(). */
+	boolean deferredRead = false;
+	/** Prefix atom count at defer time; used to sort deferred tokens last in the chain. */
+	int estimatedDeferredAtoms = 0;
 	
 	// partial place holder
 	List<PartialMatch> partialExactMatch = new ArrayList<>();
