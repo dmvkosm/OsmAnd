@@ -168,6 +168,12 @@ tasks.register('runSpatialSearchTest', JavaExec) {
 	if (findProperty('excludeMasks') != null) {
 		systemProperty 'spatial.excludeMasks', findProperty('excludeMasks')
 	}
+	if (findProperty('repeatSearch') != null) {
+		systemProperty 'spatial.repeatSearch', findProperty('repeatSearch')
+	}
+	if (findProperty('deferReadLimit') != null) {
+		systemProperty 'spatial.deferReadLimit', findProperty('deferReadLimit')
+	}
 	jvmArgs '-Xmx6g', '-Dfile.encoding=UTF-8'
 }
 

@@ -14,6 +14,7 @@ import gnu.trove.map.hash.TLongObjectHashMap;
 import gnu.trove.set.hash.TIntHashSet;
 import gnu.trove.set.hash.TLongHashSet;
 import net.osmand.search.core.HashSkipTileQuadTree;
+import net.osmand.search.core.HashSkipTileQuadTree.TileEntry;
 import net.osmand.search.core.HashSkipTileQuadTreeJoiner;
 import net.osmand.search.core.spatial.SpatialSearchToken.NameIndexAtom;
 
@@ -40,6 +41,8 @@ public class SpatialStagePipeline {
 		public NameIndexAtom mainAtom2;
 
 		public long mainMask = 0;
+		/** Legacy typeIntersections value for acceptIntersection (0/1/2). */
+		int intersectionType = 0;
 		/** Alternative masks when duplicate query words hit the same object. */
 		long[] variants;
 
@@ -472,22 +475,34 @@ public class SpatialStagePipeline {
 		}
 	}
 
-	/** Flush radius-bucketed candidates (legacy addResIntersections semantics). */
-	@SuppressWarnings("unchecked")
-	static int flushIncrementalCandidates(List<IncrementalCandidate>[] byLevel, int maxLevel,
+	/**
+	 * Flush radius-bucketed candidates split by intersection type - exact port of the legacy
+	 * 3 x addResIntersections calls: plain (type 0) defines newLevel, poi-street (1) and
+	 * street-street/poi-poi (2) are capped at that level; count is shared across all types.
+	 */
+	static int flushIncrementalCandidates(List<IncrementalCandidate>[][] byTypeLevel, int maxLevel,
 			HashSkipTileQuadTree<SpatialObjectRes> pairsTree, int limit) {
+		int[] count = new int[] { 0 };
+		int newLevel = flushCandidatesType(byTypeLevel[0], maxLevel, pairsTree, limit, count);
+		flushCandidatesType(byTypeLevel[1], newLevel, pairsTree, limit, count);
+		flushCandidatesType(byTypeLevel[2], newLevel, pairsTree, limit, count);
+		return newLevel;
+	}
+
+	private static int flushCandidatesType(List<IncrementalCandidate>[] byLevel, int maxLevel,
+			HashSkipTileQuadTree<SpatialObjectRes> pairsTree, int limit, int[] count) {
 		int newLevel = 0;
-		int count = 0;
 		for (int level = 0; level <= maxLevel; level++) {
 			List<IncrementalCandidate> toAdd = byLevel[level];
-			if (toAdd == null || toAdd.isEmpty()) {
-				continue;
-			}
-			if (count == 0 || (level == 0 && maxLevel > 0) || count + toAdd.size() < limit) {
-				for (IncrementalCandidate c : toAdd) {
-					pairsTree.addObject(c.res, c.bbox, -1);
+			int toAddSize = toAdd == null ? 0 : toAdd.size();
+			// legacy: empty levels still advance newLevel while under the limit
+			if (count[0] == 0 || (level == 0 && maxLevel > 0) || count[0] + toAddSize < limit) {
+				if (toAdd != null) {
+					for (IncrementalCandidate c : toAdd) {
+						pairsTree.addObject(c.res, c.bbox, -1);
+					}
+					count[0] += toAddSize;
 				}
-				count += toAdd.size();
 				newLevel = level;
 			} else {
 				break;
@@ -497,220 +512,73 @@ public class SpatialStagePipeline {
 	}
 
 	/**
-	 * Legacy {@link SpatialSearchResultsList} acceptIntersection rules adapted for
-	 * pipeline incremental join (parent partial + one new atom).
+	 * Legacy {@link SpatialSearchResultsList#acceptIntersectionImpl} for pipeline incremental join.
+	 * Parent atoms are ordered newest-first (reverse join chain), matching legacy parent.tokens.
 	 */
 	static boolean acceptIncrementalJoin(SpatialSearchContext ctx, List<SpatialSearchToken> tokens,
-			SpatialObjectRes parent, int leftProjectTokenIdx, SpatialSearchToken newToken, NameIndexAtom newAtom) {
-		SpatialTextSearch.SpatialTextSearchSettings settings = ctx.settings;
-		boolean sameIdReuse = false;
-		for (int i = 0; i < tokens.size(); i++) {
-			if (leftProjectTokenIdx >= 0 && i != leftProjectTokenIdx) {
-				continue;
-			}
-			NameIndexAtom pa = atomAt(parent, i);
-			if (pa == null) {
-				continue;
-			}
-			SpatialSearchToken parentToken = tokens.get(i);
-			if (pa.id == newAtom.id) {
-				sameIdReuse = true;
-				continue;
-			}
-			if (parentToken.originalOrder == newAtom.buildingOrRefInd) {
-				return false;
-			}
-			if (pa.buildingOrRefInd == newToken.originalOrder) {
-				return false;
-			}
-			if ((pa.buildingOrRefInd >= 0) && newAtom.isStreetBuilding() && !pa.isCityStreetName()) {
-				return false;
-			}
-			if ((newAtom.buildingOrRefInd >= 0) && pa.isStreetBuilding() && !newAtom.isCityStreetName()) {
-				return false;
-			}
-			if (!settings.ALLOW_HOUSE_POI_TYPE_INTERSECTION) {
-				if ((pa.buildingOrRefInd >= 0) && newAtom.isPOI() && newAtom.coords.bbox31 == null) {
-					return false;
-				}
-				if ((newAtom.buildingOrRefInd >= 0) && pa.isPOI() && pa.coords.bbox31 == null) {
-					return false;
-				}
-			}
-		}
-		for (int i = 0; i < tokens.size(); i++) {
-			if (leftProjectTokenIdx >= 0 && i != leftProjectTokenIdx) {
-				continue;
-			}
-			NameIndexAtom pa = atomAt(parent, i);
-			if (pa == null) {
-				continue;
-			}
-			SpatialSearchToken parentToken = tokens.get(i);
-			if (pa.id == newAtom.id && newToken.word.equals(parentToken.word) && !pa.isBuilding()
-					&& !newAtom.isBuilding()) {
-				int indexOf = newAtom.name.indexOf(newToken.word);
-				if (indexOf != -1 && newAtom.name.indexOf(newToken.word, indexOf + 1) >= 0) {
-					// duplicate name in object — allowed
-				} else {
-					return false;
-				}
-			}
-		}
-		NameIndexAtom poiType = newAtom.isPoiCategory() ? newAtom : null;
-		SpatialSearchToken poiTypeToken = newToken;
-		boolean buildingPresent = newAtom.isBuilding();
-		for (int i = 0; i < tokens.size(); i++) {
-			if (leftProjectTokenIdx >= 0 && i != leftProjectTokenIdx) {
-				continue;
-			}
-			NameIndexAtom pa = atomAt(parent, i);
-			if (pa == null) {
-				continue;
-			}
-			if (pa.isBuilding()) {
-				buildingPresent = true;
-			} else if (pa.isPoiCategory()) {
-				if (poiType == null || pa.id == poiType.id) {
-					poiType = pa;
-					poiTypeToken = tokens.get(i);
-				} else {
-					return false;
-				}
-			}
-		}
-		if (poiType != null && buildingPresent) {
-			return false;
-		}
-		if (sameIdReuse) {
-			return true;
-		}
-		if (!settings.DEV_USE_SKIP_HASH_TREE) {
-			for (int i = 0; i < tokens.size(); i++) {
-				if (leftProjectTokenIdx >= 0 && i != leftProjectTokenIdx) {
-					continue;
-				}
-				NameIndexAtom pa = atomAt(parent, i);
-				if (pa != null && pa.coords != null && newAtom.coords != null && !pa.coords.intersects(newAtom.coords)) {
-					return false;
-				}
-			}
-		}
-		HashMap<Long, NameIndexAtom> atomObjs = new HashMap<>(4);
-		boolean poiCategoryOnMatchingWord = false;
-		boolean poiCategoryOnNumber = false;
-		if (newAtom.atomicObject()) {
-			atomObjs.put(newAtom.id, newAtom);
-		}
-		if (!newAtom.isPoiCategory()) {
-			poiCategoryOnMatchingWord |= newToken.hasPoiCategoryKeys();
+			int[] tokenOrder, int parentTokenCount, SpatialObjectRes parent, int projectO1TokenIdx,
+			SpatialSearchToken newToken, NameIndexAtom newAtom, int[] typeOut) {
+		SpatialSearchToken[] parentTokens;
+		NameIndexAtom[] parentAtoms;
+		if (projectO1TokenIdx >= 0) {
+			parentTokens = new SpatialSearchToken[] { tokens.get(projectO1TokenIdx) };
+			parentAtoms = new NameIndexAtom[] { atomAt(parent, projectO1TokenIdx) };
 		} else {
-			poiCategoryOnNumber = newToken.likelyPartOfBuilding() || newToken.getMainNumber() > 0;
-		}
-		boolean duplicateWord = false;
-		for (int i = 0; i < tokens.size(); i++) {
-			if (leftProjectTokenIdx >= 0 && i != leftProjectTokenIdx) {
-				continue;
-			}
-			NameIndexAtom pa = atomAt(parent, i);
-			if (pa == null) {
-				continue;
-			}
-			if (pa.id == newAtom.id) {
-				continue;
-			}
-			SpatialSearchToken parentToken = tokens.get(i);
-			if (!newToken.word.equals(parentToken.word) && !duplicateWord) {
-				NameIndexAtom existing = parentToken.index.get(newAtom.id);
-				if (existing != null && !existing.isBuilding() && !existing.isPOIRef()) {
-					return false;
-				}
-				existing = newToken.index.get(pa.id);
-				if (existing != null && !existing.isBuilding() && !existing.isPOIRef()) {
-					return false;
-				}
-			} else {
-				duplicateWord = true;
-			}
-			if (!pa.isPoiCategory()) {
-				poiCategoryOnMatchingWord |= parentToken.hasPoiCategoryKeys();
-			} else {
-				poiCategoryOnNumber |= parentToken.likelyPartOfBuilding() || parentToken.getMainNumber() > 0;
-			}
-			if (pa.atomicObject()) {
-				atomObjs.put(pa.id, pa);
-			}
-			if (atomObjs.size() > settings.LIMIT_ATOMIC_OBJECTS) {
-				return false;
+			parentTokens = new SpatialSearchToken[parentTokenCount];
+			parentAtoms = new NameIndexAtom[parentTokenCount];
+			for (int j = 0; j < parentTokenCount; j++) {
+				int sortedIdx = tokenOrder[parentTokenCount - 1 - j];
+				parentTokens[j] = tokens.get(sortedIdx);
+				parentAtoms[j] = atomAt(parent, sortedIdx);
 			}
 		}
-		if (poiType != null && poiCategoryOnMatchingWord) {
-			return false;
-		}
-		if (poiType != null && atomObjs.size() > 0) {
-			NameIndexAtom p = atomObjs.values().iterator().next();
-			if (poiTypeToken.incomplete) {
-				return false;
-			}
-			if (p.isPOI()) {
-				if (p.poiTypes == null) {
-					return false;
-				}
-				boolean match = false;
-				for (int k = 0; k < p.poiTypes.size(); k++) {
-					if (ctx.poiSearch.getById(p.poiTypes.get(k)).isPlace()) {
-						match = true;
-						break;
-					}
-				}
-				if (!match) {
-					return false;
-				}
-			} else if (poiCategoryOnNumber) {
-				return false;
-			}
-		}
-		if (atomObjs.size() > 1) {
-			Iterator<NameIndexAtom> it = atomObjs.values().iterator();
-			NameIndexAtom a1 = it.next();
-			NameIndexAtom a2 = it.next();
-			if (a1.sameNameAreaObj != null || a2.sameNameAreaObj != null) {
-				return false;
-			}
-			if ((a1.isStreetBuilding() != a2.isStreetBuilding()) && !it.hasNext()) {
-				// poi-street type — allowed
-			} else {
-				boolean twoStreets = a1.isStreetBuilding() && a2.isStreetBuilding();
-				boolean twoPOIs = !a1.isStreetBuilding() && !a2.isStreetBuilding();
-				if (!settings.SEARCH_STREET_INTERSECTIONS && twoStreets) {
-					return false;
-				}
-				if (!settings.SEARCH_POI_INTERSECTIONS && twoPOIs) {
-					return false;
-				}
-			}
-		}
-		return true;
+		return SpatialSearchResultsList.acceptIntersectionImpl(ctx, parentTokens, parentAtoms,
+				parent.intersectionType, newToken, newAtom, typeOut);
 	}
 
-	@SuppressWarnings("unchecked")
-	private HashSkipTileQuadTree<SpatialObjectRes>[] buildTokenTrees(SpatialPipelineResults prep, int tokensSize) {
-		HashSkipTileQuadTree<SpatialObjectRes>[] trees = new HashSkipTileQuadTree[tokensSize];
-		for (int i = 0; i < tokensSize; i++) {
-			trees[i] = new HashSkipTileQuadTree<>();
+	static final class PartialEntry {
+		final SpatialObjectRes res;
+		final int[] bbox;
+
+		PartialEntry(SpatialObjectRes res, int[] bbox) {
+			this.res = res;
+			this.bbox = bbox;
 		}
+	}
+
+	static List<PartialEntry> dedupePartialEntries(HashSkipTileQuadTree<SpatialObjectRes> tree) {
+		tree.build();
+		LinkedHashMap<SpatialObjectRes, PartialEntry> uniq = new LinkedHashMap<>();
+		for (TileEntry<SpatialObjectRes> e : tree.getTileEntries()) {
+			uniq.putIfAbsent(e.obj, new PartialEntry(e.obj, e.bbox31));
+		}
+		return new ArrayList<>(uniq.values());
+	}
+
+	static HashSkipTileQuadTree<Integer> buildPartialSkipTree(List<PartialEntry> partials) {
+		HashSkipTileQuadTree<Integer> skip = new HashSkipTileQuadTree<>();
+		for (int i = 0; i < partials.size(); i++) {
+			int[] bbox = partials.get(i).bbox;
+			if (!isBboxEmpty(bbox)) {
+				skip.addObject(i, bbox, i);
+			}
+		}
+		skip.build();
+		return skip;
+	}
+
+	/** Partials of the chain seed: all objects matching the given token, bbox = matching atom bbox. */
+	private List<PartialEntry> buildFirstTokenPartials(SpatialPipelineResults prep, int tokenIdx) {
+		List<PartialEntry> entries = new ArrayList<>();
 		for (SpatialObjectRes obj : prep.objectsById.valueCollection()) {
-			long mask = obj.mainMask;
-			for (int t = 0; t < tokensSize; t++) {
-				if (SpatialTokenMask.getTokenState(mask, t) != STATE_NO_MATCH) {
-					NameIndexAtom atom = atomAt(obj, t);
-					if (atom != null && atom.coords != null && atom.coords.bbox31 != null) {
-						trees[t].addObject(obj, atom.coords.bbox31, atom.id);
-					}
+			if (SpatialTokenMask.getTokenState(obj.mainMask, tokenIdx) != STATE_NO_MATCH) {
+				NameIndexAtom atom = atomAt(obj, tokenIdx);
+				if (atom != null && atom.coords != null && atom.coords.bbox31 != null) {
+					entries.add(new PartialEntry(obj, atom.coords.bbox31));
 				}
 			}
 		}
-		return trees;
+		return entries;
 	}
 
 	private int[] sortedTokenIndices(List<SpatialSearchToken> tokens, int tokensSize) {
@@ -719,7 +587,7 @@ public class SpatialStagePipeline {
 			order[i] = i;
 		}
 		Arrays.sort(order, (a, b) -> {
-			int cmp = Integer.compare(tokens.get(a).atoms.size(), tokens.get(b).atoms.size());
+			int cmp = Long.compare(chainWeight(tokens.get(a)), chainWeight(tokens.get(b)));
 			return cmp != 0 ? cmp : Integer.compare(a, b);
 		});
 		int[] result = new int[tokensSize];
@@ -730,42 +598,279 @@ public class SpatialStagePipeline {
 	}
 
 	/**
-	 * Legacy-style rare-first chain: token₀ × token₁ × … instead of one 78k² self-join.
+	 * Incremental join chain order: rare tokens (few atoms) first, deferred tokens last.
+	 * Deferred tokens use a large base weight so they join only after partials have
+	 * been narrowed by earlier steps and can supply a tight bbox filter.
+	 */
+	private static long chainWeight(SpatialSearchToken t) {
+		if (t.deferredRead) {
+			return 1_000_000_000L + t.estimatedDeferredAtoms;
+		}
+		return t.atoms.size();
+	}
+
+	/**
+	 * Rare-first incremental token chain (replaces stage-2 all×all self-join).
+	 *
+	 * Flow:
+	 * 1. Sort tokens by chainWeight (small/rare first, deferred common words last).
+	 * 2. Seed partials from token₀ objects (buildFirstTokenPartials).
+	 * 3. For each next token: if deferred → readDeferredAndIngest with bbox filter
+	 *    from surviving partials; then spatial join via joinIncremental (quadTreeSkip).
+	 * 4. acceptIncrementalJoin delegates to legacy acceptIntersectionImpl for semantics.
+	 * 5. flushIncrementalCandidates mirrors legacy addResIntersections (3 type buckets).
+	 *
+	 * With OPTIM_DEFER_READ_TOKEN_ATOMS_LIMIT, match time drops because huge tokens
+	 * parse only atoms inside partial bboxes instead of the whole country prefix set.
 	 */
 	private boolean runIncrementalTokenJoin(SpatialPipelineResults prep, int tokensSize, int[] stageRef, long time)
 			throws IOException {
 		int[] tokenOrder = sortedTokenIndices(prep.tokens, tokensSize);
-		HashSkipTileQuadTree<SpatialObjectRes>[] tokenTrees = buildTokenTrees(prep, tokensSize);
-		HashSkipTileQuadTree<SpatialObjectRes> current = tokenTrees[tokenOrder[0]];
-		current.build();
+		if (prep.tokens.get(tokenOrder[0]).deferredRead) {
+			// query of only huge tokens - no rare seed, read unfiltered
+			readDeferredAndIngest(prep, tokenOrder[0], null);
+		}
+		List<PartialEntry> parentEntries = buildFirstTokenPartials(prep, tokenOrder[0]);
 		boolean exit = false;
 		int stage = stageRef[0];
 		int[] limitIntersection = new int[] { ctx.limitLocationBboxes.length };
 		for (int step = 1; step < tokensSize && !ctx.isCancelled() && !exit; step++) {
-			HashSkipTileQuadTree<SpatialObjectRes> next = tokenTrees[tokenOrder[step]];
-			if (next.isEmpty()) {
+			int addedTokenIdx = tokenOrder[step];
+			SpatialSearchToken nextToken = prep.tokens.get(addedTokenIdx);
+			if (nextToken.deferredRead) {
+				long dt = System.nanoTime();
+				readDeferredAndIngest(prep, addedTokenIdx, collectFilterBboxes(parentEntries));
+				if (ctx.stats.printLogs) {
+					System.out.printf("PIPELINE DEFERRED READ '%s' (%.1f ms): %,d/%,d atoms in %,d bboxes\n",
+							nextToken.word, (System.nanoTime() - dt) / 1e6, nextToken.atoms.size(),
+							nextToken.estimatedDeferredAtoms, parentEntries.size());
+				}
+			}
+			if (nextToken.atoms.isEmpty()) {
 				continue;
 			}
-			next.build();
 			if (ctx.stats.printLogs) {
 				System.out.printf("PIPELINE TOKEN JOIN %d/%d '%s' x '%s' - %,d x %,d (limit %d)\n", step,
-						tokensSize - 1, prep.tokens.get(tokenOrder[step - 1]).word,
-						prep.tokens.get(tokenOrder[step]).word, current.getSize(), next.getSize(),
-						limitIntersection[0]);
+						tokensSize - 1, prep.tokens.get(tokenOrder[step - 1]).word, nextToken.word,
+						parentEntries.size(), nextToken.atoms.size(), limitIntersection[0]);
 			}
-			HashSkipTileQuadTreeJoiner<SpatialObjectRes, SpatialObjectRes> joiner = new HashSkipTileQuadTreeJoiner<>(
-					current, next);
-			exit = join(prep, stage++, joiner, false, time, step == 1 ? tokenOrder[0] : -1, tokenOrder[step],
-					limitIntersection);
+			exit = joinIncremental(prep, stage++, tokenOrder, step, parentEntries,
+					step == 1 ? tokenOrder[0] : -1, addedTokenIdx, limitIntersection, time);
 			time = System.nanoTime();
 			if (prep.pairsTree.isEmpty()) {
 				break;
 			}
-			current = prep.pairsTree.get(prep.pairsTree.size() - 1);
-			current.build();
+			parentEntries = dedupePartialEntries(prep.pairsTree.get(prep.pairsTree.size() - 1));
+			if (parentEntries.isEmpty()) {
+				break;
+			}
 		}
 		stageRef[0] = stage;
 		return exit;
+	}
+
+	/**
+	 * Parse a deferred token (bbox-filtered) and merge its atoms into the pipeline object map
+	 * so the following joinIncremental step can use token.quadTreeSkip as the right side.
+	 */
+	private void readDeferredAndIngest(SpatialPipelineResults prep, int tokenIdx, List<int[]> filterBboxes)
+			throws IOException {
+		SpatialSearchToken token = prep.tokens.get(tokenIdx);
+		ctx.readDeferredTokenAtoms(token, filterBboxes);
+		TIntHashSet deleted = token.getDeletedAtoms();
+		for (NameIndexAtom atom : token.atoms) {
+			if (deleted.contains(atom.indexInToken)) {
+				continue;
+			}
+			SpatialObjectRes existing = prep.objectsById.get(atom.id);
+			if (existing != null) {
+				existing.mergeSame(atom, tokenIdx);
+			} else {
+				prep.objectsById.put(atom.id, new SpatialObjectRes(prep.tokens.size(), atom, tokenIdx));
+			}
+		}
+	}
+
+	/**
+	 * Bboxes of partial results after the previous join step — used as spatial filter
+	 * for the next deferred token read. Up to 256 individual bboxes (precise); above
+	 * that a single union bbox to keep filter checks O(1) per atom.
+	 */
+	static List<int[]> collectFilterBboxes(List<PartialEntry> parents) {
+		if (parents.isEmpty()) {
+			return null;
+		}
+		if (parents.size() > 256) {
+			int[] union = null;
+			for (PartialEntry p : parents) {
+				if (isBboxEmpty(p.bbox)) {
+					continue;
+				}
+				if (union == null) {
+					union = new int[] { p.bbox[0], p.bbox[1], p.bbox[2], p.bbox[3] };
+				} else {
+					union[0] = Math.min(union[0], p.bbox[0]);
+					union[1] = Math.min(union[1], p.bbox[1]);
+					union[2] = Math.max(union[2], p.bbox[2]);
+					union[3] = Math.max(union[3], p.bbox[3]);
+				}
+			}
+			return union == null ? null : Collections.singletonList(union);
+		}
+		List<int[]> res = new ArrayList<>(parents.size());
+		for (PartialEntry p : parents) {
+			if (!isBboxEmpty(p.bbox)) {
+				res.add(p.bbox);
+			}
+		}
+		return res.isEmpty() ? null : res;
+	}
+
+	/**
+	 * Incremental join using legacy spatial indexing: token.quadTreeSkip x partial skip-tree.
+	 */
+	private boolean joinIncremental(SpatialPipelineResults prep, int stage, int[] tokenOrder, int parentTokenCount,
+			List<PartialEntry> parentEntries, int projectO1TokenIdx, int addedTokenIdx, int[] limitIntersectionRef,
+			long time) throws IOException {
+		final int tokensSize = prep.tokens.size();
+		final SpatialSearchToken addedToken = prep.tokens.get(addedTokenIdx);
+		addedToken.quadTreeSkip.build();
+		HashSkipTileQuadTree<Integer> parentSkip = buildPartialSkipTree(parentEntries);
+		HashSkipTileQuadTreeJoiner<Integer, Integer> joiner = new HashSkipTileQuadTreeJoiner<>(
+				addedToken.quadTreeSkip, parentSkip);
+
+		List<SpatialObjectRes> pairResults = new ArrayList<>();
+		HashSkipTileQuadTree<SpatialObjectRes> pairsTree = new HashSkipTileQuadTree<>();
+		prep.pairsTree.add(pairsTree);
+		final MasksStats ms = new MasksStats(stage);
+		prep.masksStats.add(ms);
+		int[] itStats = new int[] { 0, 0, 0 };
+		if (ctx.stats.printLogs) {
+			System.out.printf("PIPELINE STAGE %d INTERSECT (legacy skip) - %,d x %,d\n", stage,
+					addedToken.atoms.size(), parentEntries.size());
+		}
+		final int limitIntersection = limitIntersectionRef[0];
+		@SuppressWarnings("unchecked")
+		final List<IncrementalCandidate>[][] byTypeLevel = new List[3][ctx.limitLocationBboxes.length + 1];
+		final boolean[] stopEarly = new boolean[] { false };
+		final int[] rejDbg = ctx.settings.DEV_DEBUG_INCREMENTAL_JOIN ? new int[8] : null;
+
+		joiner.joinAllBuckets((e1, e2) -> {
+			if (stopEarly[0]) {
+				return;
+			}
+			itStats[0]++;
+			int atomIdx = e1.obj;
+			int partialIdx = e2.obj;
+			if (addedToken.deletedAtoms.contains(atomIdx)) {
+				return;
+			}
+			NameIndexAtom newAtom = addedToken.atoms.get(atomIdx);
+			SpatialObjectRes o1 = parentEntries.get(partialIdx).res;
+			SpatialObjectRes o2 = prep.objectsById.get(newAtom.id);
+			if (o2 == null) {
+				if (rejDbg != null) {
+					rejDbg[0]++;
+				}
+				return;
+			}
+			long m1, m2, combinedMask;
+			if (o1.variants == null && o2.variants == null) {
+				m1 = incrementalLeftMask(o1, projectO1TokenIdx);
+				m2 = SpatialTokenMask.projectMaskForToken(o2.mainMask, addedTokenIdx);
+				if (!SpatialTokenMask.allowed(m1, m2)) {
+					if (rejDbg != null) {
+						rejDbg[1]++;
+					}
+					return;
+				}
+				combinedMask = SpatialTokenMask.combinePartial(m1, m2);
+			} else {
+				long[] vars1 = incrementalLeftVariants(o1, projectO1TokenIdx);
+				long[] vars2 = o2.variants();
+				long[] p2 = new long[vars2.length];
+				for (int vi = 0; vi < vars2.length; vi++) {
+					p2[vi] = SpatialTokenMask.projectMaskForToken(vars2[vi], addedTokenIdx);
+				}
+				long[] best = SpatialTokenMask.bestAllowedCombinePartial(vars1, p2);
+				if (best == null) {
+					if (rejDbg != null) {
+						rejDbg[2]++;
+					}
+					return;
+				}
+				combinedMask = best[0];
+				m1 = best[1];
+				m2 = best[2];
+			}
+			ms.count(combinedMask);
+			int[] typeOut = new int[] { -1 };
+			if (SpatialTokenMask.countCoveredTokens(combinedMask) == tokensSize) {
+				if (!acceptIncrementalJoin(ctx, prep.tokens, tokenOrder, parentTokenCount, o1, projectO1TokenIdx,
+						addedToken, newAtom, typeOut)) {
+					return;
+				}
+				itStats[1]++;
+				itStats[2]++;
+				long fm1 = incrementalLeftMask(o1, projectO1TokenIdx);
+				long fm2 = SpatialTokenMask.projectMaskForToken(o2.mainMask, addedTokenIdx);
+				for (long[] resolved : SpatialTokenMask.expandContestedTokens(fm1, fm2)) {
+					long resolvedMask = SpatialTokenMask.combine(resolved[0], resolved[1]);
+					SpatialObjectRes res = new SpatialObjectRes(resolvedMask, resolved[0], resolved[1], o1, o2);
+					if (acceptPairSemantic(ctx, res)) {
+						pairResults.add(res);
+						if (ctx.settings.PIPELINE_STOP_ON_FIRST_COMPLETE) {
+							stopEarly[0] = true;
+						}
+					}
+				}
+				return;
+			}
+			int level = joinNearbyLevel(o1, newAtom, projectO1TokenIdx);
+			if (level > limitIntersection) {
+				if (rejDbg != null) {
+					rejDbg[4]++;
+				}
+				return;
+			}
+			if (!acceptIncrementalJoin(ctx, prep.tokens, tokenOrder, parentTokenCount, o1, projectO1TokenIdx,
+					addedToken, newAtom, typeOut)) {
+				if (rejDbg != null) {
+					rejDbg[3]++;
+				}
+				return;
+			}
+			SpatialObjectRes res = new SpatialObjectRes(combinedMask, m1, m2, o1, o2);
+			res.intersectionType = Math.max(0, typeOut[0]);
+			if (res.mainAtom1 == null) {
+				if (rejDbg != null) {
+					rejDbg[5]++;
+				}
+				return;
+			}
+			int[] clippedBBox = intersectionBboxForJoin(o1, o2, addedTokenIdx, projectO1TokenIdx);
+			if (isBboxEmpty(clippedBBox)) {
+				if (rejDbg != null) {
+					rejDbg[6]++;
+				}
+				return;
+			}
+			int type = res.intersectionType;
+			if (byTypeLevel[type][level] == null) {
+				byTypeLevel[type][level] = new ArrayList<>();
+			}
+			byTypeLevel[type][level].add(new IncrementalCandidate(res, clippedBBox, level));
+			itStats[1]++;
+		});
+
+		limitIntersectionRef[0] = flushIncrementalCandidates(byTypeLevel, limitIntersection, pairsTree,
+				ctx.settings.OPTIM_LIMIT_INTERSECTIONS);
+		if (rejDbg != null && itStats[0] > 0) {
+			System.out.printf("  JOIN DEBUG '%s': cross %,d allowedFail %,d varFail %,d semFail %,d levelFail %,d"
+					+ " mainAtomFail %,d bboxFail %,d kept %,d\n", addedToken.word, itStats[0], rejDbg[1], rejDbg[2],
+					rejDbg[3], rejDbg[4], rejDbg[5], rejDbg[6], itStats[1]);
+		}
+		return validateStageAndFinish(prep, itStats, pairResults, stage, time);
 	}
 
 	public List<SpatialSearchResultsList> runPipeline(List<SpatialSearchToken> tokens) throws IOException {
@@ -814,7 +919,7 @@ public class SpatialStagePipeline {
 		} else {
 			HashSkipTileQuadTreeJoiner<SpatialObjectRes, SpatialObjectRes> selfJoiner = new HashSkipTileQuadTreeJoiner<>(
 					prep.allObjectsTree, prep.allObjectsTree);
-			exit = join(prep, stage, selfJoiner, true, time, -1, -1, null);
+			exit = join(prep, stage, selfJoiner, true, time);
 			stage++;
 		}
 		if (ctx.isCancelled() || exit) {
@@ -831,7 +936,7 @@ public class SpatialStagePipeline {
 			lastTree.build();
 			HashSkipTileQuadTreeJoiner<SpatialObjectRes, SpatialObjectRes> joiner = new HashSkipTileQuadTreeJoiner<>(
 					lastTree, prep.areaObjectsTree);
-			exit = join(prep, stage, joiner, false, time, -1, -1, null);
+			exit = join(prep, stage, joiner, false, time);
 			time = System.nanoTime();
 		}
 		// check potential missing results
@@ -896,7 +1001,7 @@ public class SpatialStagePipeline {
 				partialTree.build();
 				HashSkipTileQuadTreeJoiner<SpatialObjectRes, SpatialObjectRes> tailJoiner = new HashSkipTileQuadTreeJoiner<>(
 						partialTree, exclTree);
-				boolean exit = join(prep, stage + 1, tailJoiner, false, time, -1, -1, null);
+				boolean exit = join(prep, stage + 1, tailJoiner, false, time);
 				if (ctx.isCancelled() || exit) {
 					return;
 				}
@@ -906,11 +1011,10 @@ public class SpatialStagePipeline {
 	}
 
 	private boolean join(SpatialPipelineResults prep, int stage,
-			HashSkipTileQuadTreeJoiner<SpatialObjectRes, SpatialObjectRes> joiner, boolean selfJoin, long time,
-			int projectO1TokenIdx, int projectO2TokenIdx, int[] limitIntersectionRef) throws IOException {
+			HashSkipTileQuadTreeJoiner<SpatialObjectRes, SpatialObjectRes> joiner, boolean selfJoin, long time)
+			throws IOException {
 		List<SpatialObjectRes> pairResults = new ArrayList<>();
 		final int tokensSize = prep.tokens.size();
-		final boolean incremental = projectO2TokenIdx >= 0;
 		HashSkipTileQuadTree<SpatialObjectRes> pairsTree = new HashSkipTileQuadTree<>();
 		prep.pairsTree.add(pairsTree);
 		final MasksStats ms = new MasksStats(stage);
@@ -921,14 +1025,6 @@ public class SpatialStagePipeline {
 					joiner.getTree1().getSize(), joiner.getTree2().getSize());
 		}
 		final boolean[] stopEarly = new boolean[] { false };
-		final SpatialSearchToken addedToken = incremental ? prep.tokens.get(projectO2TokenIdx) : null;
-		final int limitIntersection = incremental && limitIntersectionRef != null ? limitIntersectionRef[0]
-				: ctx.limitLocationBboxes.length;
-		@SuppressWarnings("unchecked")
-		final List<IncrementalCandidate>[] byLevel = incremental
-				? new List[ctx.limitLocationBboxes.length + 1]
-				: null;
-		final int[] maxLevel = new int[] { 0 };
 		joiner.joinAllBuckets((e1, e2) -> {
 			if (stopEarly[0]) {
 				return;
@@ -941,25 +1037,14 @@ public class SpatialStagePipeline {
 			SpatialObjectRes o2 = e2.obj;
 			long m1, m2, combinedMask;
 			if (o1.variants == null && o2.variants == null) {
-				m1 = incremental ? incrementalLeftMask(o1, projectO1TokenIdx) : o1.mainMask;
-				m2 = incremental ? SpatialTokenMask.projectMaskForToken(o2.mainMask, projectO2TokenIdx) : o2.mainMask;
+				m1 = o1.mainMask;
+				m2 = o2.mainMask;
 				if (!SpatialTokenMask.allowed(m1, m2)) {
 					return;
 				}
-				combinedMask = incremental ? SpatialTokenMask.combinePartial(m1, m2)
-						: SpatialTokenMask.combine(m1, m2);
+				combinedMask = SpatialTokenMask.combine(m1, m2);
 			} else {
-				long[] vars1 = incremental ? incrementalLeftVariants(o1, projectO1TokenIdx) : o1.variants();
-				long[] vars2 = o2.variants();
-				if (incremental) {
-					long[] p2 = new long[vars2.length];
-					for (int vi = 0; vi < vars2.length; vi++) {
-						p2[vi] = SpatialTokenMask.projectMaskForToken(vars2[vi], projectO2TokenIdx);
-					}
-					vars2 = p2;
-				}
-				long[] best = incremental ? SpatialTokenMask.bestAllowedCombinePartial(vars1, vars2)
-						: SpatialTokenMask.bestAllowedCombine(vars1, vars2);
+				long[] best = SpatialTokenMask.bestAllowedCombine(o1.variants(), o2.variants());
 				if (best == null) {
 					return;
 				}
@@ -971,14 +1056,7 @@ public class SpatialStagePipeline {
 			if (SpatialTokenMask.countCoveredTokens(combinedMask) == tokensSize) {
 				itStats[1]++;
 				itStats[2]++;
-				NameIndexAtom addedAtom = atomAt(o2, projectO2TokenIdx);
-				if (incremental && !acceptIncrementalJoin(ctx, prep.tokens, o1, projectO1TokenIdx, addedToken,
-						addedAtom)) {
-					return;
-				}
-				long fm1 = incremental ? incrementalLeftMask(o1, projectO1TokenIdx) : m1;
-				long fm2 = incremental ? SpatialTokenMask.projectMaskForToken(o2.mainMask, projectO2TokenIdx) : m2;
-				for (long[] resolved : SpatialTokenMask.expandContestedTokens(fm1, fm2)) {
+				for (long[] resolved : SpatialTokenMask.expandContestedTokens(m1, m2)) {
 					long resolvedMask = SpatialTokenMask.combine(resolved[0], resolved[1]);
 					SpatialObjectRes res = new SpatialObjectRes(resolvedMask, resolved[0], resolved[1], o1, o2);
 					if (acceptPairSemantic(ctx, res)) {
@@ -994,27 +1072,6 @@ public class SpatialStagePipeline {
 			if (res.mainAtom1 == null) {
 				return;
 			}
-			if (incremental) {
-				NameIndexAtom newAtom = atomAt(o2, projectO2TokenIdx);
-				if (!acceptIncrementalJoin(ctx, prep.tokens, o1, projectO1TokenIdx, addedToken, newAtom)) {
-					return;
-				}
-				int level = joinNearbyLevel(o1, newAtom, projectO1TokenIdx);
-				if (level > limitIntersection) {
-					return;
-				}
-				int[] clippedBBox = intersectionBboxForJoin(o1, o2, projectO2TokenIdx, projectO1TokenIdx);
-				if (isBboxEmpty(clippedBBox)) {
-					return;
-				}
-				if (byLevel[level] == null) {
-					byLevel[level] = new ArrayList<>();
-				}
-				byLevel[level].add(new IncrementalCandidate(res, clippedBBox, level));
-				maxLevel[0] = Math.max(maxLevel[0], level);
-				itStats[1]++;
-				return;
-			}
 			itStats[1]++;
 			int[] bb = res.mainAtom1.coords.bbox31;
 			int[] clippedBBox = new int[] { bb[0], bb[1], bb[2], bb[3] };
@@ -1023,11 +1080,6 @@ public class SpatialStagePipeline {
 			}
 			pairsTree.addObject(res, clippedBBox, -1);
 		});
-		if (incremental && limitIntersectionRef != null) {
-			limitIntersectionRef[0] = flushIncrementalCandidates(byLevel, maxLevel[0], pairsTree,
-					ctx.settings.OPTIM_LIMIT_INTERSECTIONS);
-		}
-
 		return validateStageAndFinish(prep, itStats, pairResults, stage, time);
 	}
 

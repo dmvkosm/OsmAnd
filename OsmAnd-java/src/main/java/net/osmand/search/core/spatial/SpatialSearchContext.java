@@ -66,6 +66,32 @@ public class SpatialSearchContext {
 
 	List<SpatialSearchToken> tokens = null; // non initiatilized
 	Set<String> commonlyUsedWords = new HashSet<String>();
+
+	/**
+	 * Saved prefix-index blocks for a token whose atom parsing was deferred in readAtoms().
+	 * Protobuf data is already in memory; only name assembly + collator matching is postponed.
+	 */
+	static class DeferredTokenRead {
+		final SpatialSearchToken token;
+		final NameIndexReader indx;
+		final int indxInd;
+		final List<PrefixNameValue> prefixes;
+
+		DeferredTokenRead(SpatialSearchToken token, NameIndexReader indx, int indxInd,
+				List<PrefixNameValue> prefixes) {
+			this.token = token;
+			this.indx = indx;
+			this.indxInd = indxInd;
+			this.prefixes = prefixes;
+		}
+	}
+
+	List<DeferredTokenRead> deferredReads = new ArrayList<>();
+	/**
+	 * While readDeferredTokenAtoms() runs, parseAtomSuffixes skips atoms whose bbox
+	 * does not intersect any bbox in this list. null = no spatial filter (read all).
+	 */
+	private List<int[]> atomBboxFilter = null;
 	
 	public static class SpatialSearchStats {
 		public Timer requestTime = new Timer();
@@ -450,10 +476,90 @@ public class SpatialSearchContext {
 				}
 				stats.sub1FileAtomsTime.finish();
 			}
+			if (deferTokenParse(t, matchedPrefixes)) {
+				deferredReads.add(new DeferredTokenRead(t, indx, indxInd, matchedPrefixes));
+				continue;
+			}
 			for (PrefixNameValue prefix : matchedPrefixes) {
 				parseAtomSuffixes(t, indxInd, indx, prefix, tokens);
 			}
 		}
+	}
+
+	/**
+	 * Decide whether to defer atom parsing for this token in readAtoms().
+	 *
+	 * Deferred when: incremental pipeline is on, prefix atom count exceeds limit,
+	 * token is not a category/building token, and the same word does not appear twice
+	 * in the query (duplicate-word variant masks need all copies read up front).
+	 */
+	private boolean deferTokenParse(SpatialSearchToken t, List<PrefixNameValue> matchedPrefixes) {
+		int limit = settings.OPTIM_DEFER_READ_TOKEN_ATOMS_LIMIT;
+		if (limit <= 0 || !settings.DEV_USE_PIPELINE || !settings.DEV_USE_INCREMENTAL_PIPELINE) {
+			return false;
+		}
+		if (t.categoryMatchMode || t.likelyPartOfBuilding()) {
+			return false;
+		}
+		for (SpatialSearchToken o : tokens) {
+			// duplicate-word variants are computed globally - don't defer those tokens
+			if (o != t && o.word.equals(t.word)) {
+				return false;
+			}
+		}
+		int atomCnt = 0;
+		for (PrefixNameValue prefix : matchedPrefixes) {
+			atomCnt += prefix.addr != null ? prefix.addr.getAtomCount() : prefix.poi.getAtomsCount();
+		}
+		if (atomCnt <= limit) {
+			return false;
+		}
+		t.deferredRead = true;
+		t.estimatedDeferredAtoms += atomCnt;
+		return true;
+	}
+
+	/**
+	 * Finish deferred parsing for one token, spatially filtered by partial bboxes from
+	 * the incremental join chain. Replays the same parseAtomSuffixes path as readAtoms,
+	 * then flushes partial-common atoms (same as the post-readAtoms loop).
+	 *
+	 * @param filterBboxes bbox31 list from collectFilterBboxes(); null reads everything
+	 */
+	void readDeferredTokenAtoms(SpatialSearchToken t, List<int[]> filterBboxes) throws IOException {
+		atomBboxFilter = filterBboxes;
+		try {
+			for (DeferredTokenRead d : deferredReads) {
+				if (d.token != t) {
+					continue;
+				}
+				for (PrefixNameValue prefix : d.prefixes) {
+					parseAtomSuffixes(t, d.indxInd, d.indx, prefix, tokens);
+				}
+			}
+		} finally {
+			atomBboxFilter = null;
+		}
+		if (settings.OPTIM_READ_COMMON_WITH_OTH_NON_FOUND_ATOMS || settings.OPTIM_READ_POI_CATEGORY_WORD_ATOMS) {
+			addPartialMatch(t, t.getPartialExactMatch());
+			addPartialMatch(t, t.getPartialMatch());
+			t.clearPartialAtoms();
+		}
+		t.deferredRead = false;
+	}
+
+	/** Cheap bbox gate before suffix parsing; avoids collator work outside the search area. */
+	private boolean passesAtomBboxFilter(AddressNameIndexDataAtom a, OsmAndPoiNameIndexDataAtom b) {
+		if (atomBboxFilter == null) {
+			return true;
+		}
+		NameIndexAtomXY xy = new NameIndexAtomXY(a, b, settings);
+		for (int[] bbox : atomBboxFilter) {
+			if (xy.intersects(bbox)) {
+				return true;
+			}
+		}
+		return false;
 	}
 	
 	static boolean checkPoiTypeId(int poiTypeId) {
@@ -507,6 +613,9 @@ public class SpatialSearchContext {
 						&& a.getType() != CityBlocks.VILLAGES_TYPE.index && a.getType() != CityBlocks.POSTCODES_TYPE.index) {
 					continue;
 				}
+				if (!passesAtomBboxFilter(a, null)) {
+					continue;
+				}
 				MapObject obj = null;
 //				obj = readAddrObject(lid, pid, null);
 				parseSuffixes(t, indx, suffixes, commonSuffixes, a, null, lid, pid, obj, allTokens);
@@ -522,6 +631,9 @@ public class SpatialSearchContext {
 				MapObject amenity = null;
 //				amenity = readPoiObject(lid, null);
 				if (settings.SEARCH_POI_BY_CATEGORY_ONLY && skipFilteredZoomObject(t, a)) {
+					continue;
+				}
+				if (!passesAtomBboxFilter(null, a)) {
 					continue;
 				}
 				parseSuffixes(t, indx, suffixes, commonSuffixes, null, a, lid, 0, amenity, allTokens);

@@ -184,6 +184,11 @@ public class SpatialSearchTestAndDocs {
 			settings.DEV_USE_INCREMENTAL_PIPELINE = Boolean.parseBoolean(useIncremental);
 			System.out.println("DEV_USE_INCREMENTAL_PIPELINE = " + settings.DEV_USE_INCREMENTAL_PIPELINE);
 		}
+		String deferReadLimit = System.getProperty("spatial.deferReadLimit");
+		if (deferReadLimit != null) {
+			settings.OPTIM_DEFER_READ_TOKEN_ATOMS_LIMIT = Integer.parseInt(deferReadLimit);
+			System.out.println("OPTIM_DEFER_READ_TOKEN_ATOMS_LIMIT = " + settings.OPTIM_DEFER_READ_TOKEN_ATOMS_LIMIT);
+		}
 		String checkExcluded = System.getProperty("spatial.checkExcluded");
 		if (checkExcluded != null) {
 			SpatialStagePipeline.CHECK_EXCLUDED = Boolean.parseBoolean(checkExcluded);
@@ -625,6 +630,16 @@ public class SpatialSearchTestAndDocs {
 		SpatialPoiSearch poiSearch = new SpatialPoiSearch(poiTypes);
 		SpatialSearchContext searchContext = new SpatialSearchContext(settings, ls, poiSearch, location);
 		SpatialSearchResults rs = a.searchTest(query, searchContext, 10000);
+		int repeatSearch = Integer.parseInt(System.getProperty("spatial.repeatSearch", "0"));
+		for (int rep = 1; rep <= repeatSearch; rep++) {
+			// warm JVM re-run: honest steady-state timing (OsmAnd app runs warm)
+			searchContext = new SpatialSearchContext(settings, ls, poiSearch, location);
+			searchContext.stats.printLogs = false;
+			long nt = System.nanoTime();
+			rs = a.searchTest(query, searchContext, 1);
+			System.out.printf("WARM RUN %d: total %.1f ms | %s\n", rep, (System.nanoTime() - nt) / 1e6,
+					searchContext.stats);
+		}
 		SpatialSearchResult mainResult = rs.getFirstResult();
 		if (mainResult != null && mainResult.matchedTokens() < rs.tokens.size() - 2) {
 			// another way to check to check to get mainResult - boundary object
